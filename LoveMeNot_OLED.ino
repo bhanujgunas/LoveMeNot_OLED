@@ -1,26 +1,24 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+
+// ----------- OPTIONAL FONTS -----------
 #include <Fonts/FreeSerifItalic9pt7b.h>   // cursive-like
 #include <Fonts/FreeSansBold12pt7b.h>     // bold
 #include <Fonts/FreeMono9pt7b.h>          // monospace
 
+// ----------- I2C PINS (ESP8266) -----------
 #define SDA_PIN D7
 #define SCL_PIN D6
 
+// ----------- DISPLAY CONFIG -----------
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
+#define FRAME_TIME 40   // ~25 FPS (stable + smooth)
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-#define FRAME_TIME 40   // 40ms ≈ 25 FPS (smooth + ESP8266 safe)
-
-// ---------------- LYRICS ----------------
-struct LyricLine {
-  uint32_t time;
-  const char* text;
-};
-
+// ----------- PARTICLE CONFIG -----------
 #define MAX_PARTICLES 12
 
 struct Particle {
@@ -29,6 +27,12 @@ struct Particle {
 };
 
 Particle particles[MAX_PARTICLES];
+
+// ----------- LYRICS STRUCT -----------
+struct LyricLine {
+  uint32_t time;
+  const char* text;
+};
 
 LyricLine lyrics[] = {
   {16830, "See, right now, I need you, I'll meet you somewhere now"},
@@ -96,14 +100,15 @@ LyricLine lyrics[] = {
 
 int totalLines = sizeof(lyrics) / sizeof(lyrics[0]);
 
-// ---------------- STYLE ----------------
+// ----------- STYLE CONFIG -----------
 struct Style {
-  int align;
-  bool uppercase;
-  int fontType;
-  int mode;
+  int align;      // 0=center, 1=left, 2=right
+  bool uppercase; // convert text to uppercase
+  int fontType;   // font selection
+  int mode;       // animation mode
 };
 
+// ----------- RANDOM STYLE PICKER -----------
 Style pickStyle() {
   Style s;
   s.align = random(3);
@@ -113,7 +118,7 @@ Style pickStyle() {
   return s;
 }
 
-// ---------------- FONT ----------------
+// ----------- APPLY FONT -----------
 void applyFont(int type) {
   switch (type) {
     case 0: display.setFont(); break;
@@ -123,7 +128,7 @@ void applyFont(int type) {
   }
 }
 
-// ---------------- SAFE DRAW ----------------
+// ----------- SAFE TEXT DRAW -----------
 void drawText(String txt, Style s, bool negative) {
 
   applyFont(s.fontType);
@@ -133,7 +138,7 @@ void drawText(String txt, Style s, bool negative) {
 
   display.getTextBounds(txt, 0, 0, &x1, &y1, &w, &h);
 
-  // normalize bounding box
+  // normalize bounding box (IMPORTANT FIX)
   int textX = -x1;
   int textY = -y1;
 
@@ -143,14 +148,14 @@ void drawText(String txt, Style s, bool negative) {
   else if (s.align == 1) x = 0;
   else x = SCREEN_WIDTH - w;
 
-  // clamp safely
+  // clamp to prevent wrapping
   if (x < 0) x = 0;
   if (x > SCREEN_WIDTH - w) x = SCREEN_WIDTH - w;
 
   int y = (SCREEN_HEIGHT - h) / 2;
   if (y < 0) y = 0;
 
-  // TRUE NEGATIVE (NO invertDisplay)
+  // TRUE NEGATIVE MODE (safe)
   if (negative) {
     display.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, WHITE);
     display.setTextColor(BLACK);
@@ -162,14 +167,13 @@ void drawText(String txt, Style s, bool negative) {
   display.print(txt);
 }
 
-// ---------------- SPLIT ----------------
+// ----------- SPLIT WORDS -----------
 int splitWords(String text, String out[], int maxParts) {
 
   int count = 0;
   String word = "";
 
   for (size_t i = 0; i < text.length(); i++) {
-
     if (text[i] == ' ') {
       if (count < maxParts) out[count++] = word;
       word = "";
@@ -184,74 +188,16 @@ int splitWords(String text, String out[], int maxParts) {
   return count;
 }
 
-// ---------------- RENDER FRAME ----------------
-void renderFrame(String txt, Style s) {
+// ----------- PARTICLE EFFECTS -----------
 
-  display.clearDisplay();
-
-  bool negative = (s.mode == 1);
-
-  // background effect first
-  if (s.mode == 2) {
-    display.drawFastHLine(random(128), random(64), random(20, 60), WHITE);
-  }
-
-  // 🔥 ADD PARTICLES HERE
-  updateParticles();   // falling glitter
-  drawSparkles();      // twinkle
-  if (random(5) == 0) drawBurst();  // occasional burst
-
-  drawText(txt, s, negative);
-
-  display.display();
-}
-
-// ---------------- TIMED DISPLAY ----------------
-void showWordTimed(String txt, Style s, uint32_t end) {
-
-  while (millis() < end) {
-
-    uint32_t frameStart = millis();
-
-    renderFrame(txt, s);
-
-    // maintain stable frame rate
-    uint32_t elapsed = millis() - frameStart;
-
-    if (elapsed < FRAME_TIME) {
-      delay(FRAME_TIME - elapsed);
-    }
-  }
-}
-
-// ---------------- PLAY ENGINE ----------------
-void playLine(String text, uint32_t start, uint32_t end) {
-
-  Style s = pickStyle();
-
-  if (s.uppercase) text.toUpperCase();
-
-  String words[20];
-  int count = splitWords(text, words, 20);
-
-  uint32_t total = end - start;
-  uint32_t per = total / count;
-
-  for (int i = 0; i < count; i++) {
-
-    uint32_t wStart = start + i * per;
-    uint32_t wEnd   = start + (i + 1) * per;
-
-    showWordTimed(words[i], s, wEnd);
-  }
-}
-
+// sparkles (random twinkle)
 void drawSparkles() {
   for (int i = 0; i < 8; i++) {
     display.drawPixel(random(SCREEN_WIDTH), random(SCREEN_HEIGHT), WHITE);
   }
 }
 
+// burst effect
 void drawBurst() {
   int cx = random(40, 90);
   int cy = random(20, 50);
@@ -261,6 +207,7 @@ void drawBurst() {
   }
 }
 
+// falling particles
 void updateParticles() {
   for (int i = 0; i < MAX_PARTICLES; i++) {
 
@@ -275,7 +222,72 @@ void updateParticles() {
   }
 }
 
-// ---------------- SETUP ----------------
+// ----------- FRAME RENDER -----------
+// Draws ONE frame (text + particles + effects)
+void renderFrame(String txt, Style s) {
+
+  display.clearDisplay();
+
+  bool negative = (s.mode == 1);
+
+  // simple glitch line
+  if (s.mode == 2) {
+    display.drawFastHLine(random(128), random(64), random(20, 60), WHITE);
+  }
+
+  // particle overlay
+  updateParticles();
+  drawSparkles();
+
+  if (random(5) == 0) drawBurst();
+
+  drawText(txt, s, negative);
+
+  display.display();
+}
+
+// ----------- TIMED DISPLAY -----------
+// Shows ONE word within exact time window
+void showWordTimed(String txt, Style s, uint32_t end) {
+
+  while (millis() < end) {
+
+    uint32_t frameStart = millis();
+
+    renderFrame(txt, s);
+
+    uint32_t elapsed = millis() - frameStart;
+
+    // maintain stable FPS
+    if (elapsed < FRAME_TIME) {
+      delay(FRAME_TIME - elapsed);
+    }
+  }
+}
+
+// ----------- PLAY LINE -----------
+// Splits sentence → words → shows each in time slice
+void playLine(String text, uint32_t start, uint32_t end) {
+
+  Style s = pickStyle();
+
+  if (s.uppercase) text.toUpperCase();
+
+  String words[20];
+  int count = splitWords(text, words, 20);
+
+  uint32_t total = end - start;
+  uint32_t per = total / count;
+
+  for (int i = 0; i < count; i++) {
+
+    uint32_t wEnd = start + (i + 1) * per;
+
+    showWordTimed(words[i], s, wEnd);
+  }
+}
+
+// ----------- SETUP -----------
 void setup() {
   Serial.begin(115200);
 
@@ -290,24 +302,27 @@ void setup() {
 
   randomSeed(micros());
 
+  // initialize particles
   for (int i = 0; i < MAX_PARTICLES; i++) {
-  particles[i].x = random(SCREEN_WIDTH);
-  particles[i].y = random(SCREEN_HEIGHT);
-  particles[i].speed = random(1, 3);
-}
+    particles[i].x = random(SCREEN_WIDTH);
+    particles[i].y = random(SCREEN_HEIGHT);
+    particles[i].speed = random(1, 3);
+  }
 }
 
-// ---------------- LOOP ----------------
+// ----------- LOOP -----------
 void loop() {
 
   uint32_t baseTime = millis();
 
   for (int i = 0; i < totalLines - 1; i++) {
 
+    // wait until timestamp
     while (millis() - baseTime < lyrics[i].time) {
       delay(1);
     }
 
+    // play line within time window
     playLine(
       lyrics[i].text,
       baseTime + lyrics[i].time,
@@ -315,5 +330,5 @@ void loop() {
     );
   }
 
-  while (1);
+  while (1); // stop after one run
 }
