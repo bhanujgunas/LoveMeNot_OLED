@@ -1,411 +1,319 @@
-/*
- * ╔══════════════════════════════════════════╗
- * ║   "LOVE ME NOT" — OLED Lyric Animation  ║
- * ║   ESP8266 + SSD1306 128x64               ║
- * ║   SCL → D3   SDA → D2                   ║
- * ╚══════════════════════════════════════════╝
- *
- * Libraries needed (install via Arduino Library Manager):
- *   - Adafruit SSD1306
- *   - Adafruit GFX Library
- *
- * Each lyric segment has its own crazy animation style.
- * Adjust the BEAT_MS constant to match your song's BPM.
- */
-
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <Fonts/FreeSerifItalic9pt7b.h>   // cursive-like
+#include <Fonts/FreeSansBold12pt7b.h>     // bold
+#include <Fonts/FreeMono9pt7b.h>          // monospace
 
-// ── Pin config ────────────────────────────────────────────
-#define SDA_PIN D2
-#define SCL_PIN D3
+#define SDA_PIN D7
+#define SCL_PIN D6
 
-// ── Display config ────────────────────────────────────────
-#define SCREEN_W  128
-#define SCREEN_H   64
-#define OLED_ADDR 0x3C
-Adafruit_SSD1306 display(SCREEN_W, SCREEN_H, &Wire, -1);
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
 
-// ── Timing ────────────────────────────────────────────────
-// One "beat" in ms — adjust to match your song BPM
-// 120 BPM → 500ms   |   100 BPM → 600ms   |   140 BPM → 428ms
-#define BEAT_MS  500
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-// ─────────────────────────────────────────────────────────
-//  LYRIC SEGMENTS
-//  Each entry: { "line1", "line2", beats_to_hold, anim_style }
-//  anim_style:
-//   0 = GLITCH SLIDE IN from right
-//   1 = TYPEWRITER (letter by letter)
-//   2 = HEARTBEAT PULSE (zoom-like invert flash)
-//   3 = SHAKE / TREMBLE
-//   4 = SCANLINE WIPE top→bottom
-//   5 = SPLIT REVEAL (top half & bottom half come from edges)
-//   6 = STROBE FLASH (blink in)
-//   7 = MATRIX RAIN then reveal
-// ─────────────────────────────────────────────────────────
-struct Lyric {
-  const char* line1;
-  const char* line2;
-  uint8_t     beats;
-  uint8_t     style;
+#define FRAME_TIME 40   // 40ms ≈ 25 FPS (smooth + ESP8266 safe)
+
+// ---------------- LYRICS ----------------
+struct LyricLine {
+  uint32_t time;
+  const char* text;
 };
 
-const Lyric lyrics[] = {
-  { "LOVE",        "ME NOT",     4,  2 },  // heartbeat pulse
-  { "DO YOU",      "LOVE ME?",   3,  0 },  // glitch slide
-  { "OR NOT?",     "",           2,  6 },  // strobe
-  { "I CAN'T",     "TELL...",    4,  1 },  // typewriter
-  { "YOUR EYES",   "SAY YES",    4,  5 },  // split reveal
-  { "YOUR LIPS",   "SAY NO",     4,  3 },  // shake
-  { "LOVE",        "ME",         2,  2 },  // pulse
-  { "NOT",         "",           2,  6 },  // strobe
-  { "TEARING",     "ME APART",   4,  4 },  // scanline
-  { "LOVE ME",     "LOVE ME",    3,  7 },  // matrix rain
-  { "NOT",         "",           2,  6 },  // strobe
-  { "JUST",        "DECIDE!",    4,  3 },  // shake
-  { "LOVE",        "♥",          3,  2 },  // heartbeat
-  { "ME",          "NOT",        4,  5 },  // split reveal
-  { "LOVE ME NOT", "LOVE ME NOT",5,  7 },  // matrix rain
-  { "I STILL",     "LOVE YOU",   5,  1 },  // typewriter
-  { "",            "...",        3,  4 },  // scanline
-  { "LOVE",        "ME NOT",     6,  2 },  // final pulse
+#define MAX_PARTICLES 12
+
+struct Particle {
+  int x, y;
+  int speed;
 };
-const uint8_t LYRIC_COUNT = sizeof(lyrics) / sizeof(lyrics[0]);
 
-// ── Helpers ───────────────────────────────────────────────
-void cls() { display.clearDisplay(); }
-void show() { display.display(); }
+Particle particles[MAX_PARTICLES];
 
-// Center text on a given Y baseline
-void centeredText(const char* txt, int y, uint8_t sz = 1) {
-  display.setTextSize(sz);
-  int16_t x1, y1; uint16_t w, h;
-  display.getTextBounds(txt, 0, y, &x1, &y1, &w, &h);
-  display.setCursor((SCREEN_W - w) / 2, y);
+LyricLine lyrics[] = {
+  {16830, "See, right now, I need you, I'll meet you somewhere now"},
+  {21130, "You up now, I see you, I get you, take care now"},
+  {25500, "Slow down, be cool, I miss you, come here now"},
+  {29540, "It's yours now, keep it, I'll hold out until now"},
+  {33690, "I need you right now, once I leave you, I'm strung out"},
+  {37690, "If I get you, I'm slowly breaking down"},
+
+  {41910, "And, oh, it's hard to see you, but I wish you were right here"},
+  {46320, "Oh, it's hard to leave you when I get you everywhere"},
+  {50500, "All this time, I'm thinking we could never be a pair"},
+  {54720, "Oh, no, I don't need you, but I miss you, come here"},
+
+  {58700, "And, oh, it's hard to see you, but I wish you were right here"},
+  {63200, "Oh, it's hard to leave you when I get you everywhere"},
+  {67360, "All this time, I'm thinking, I'm strong enough to sink it"},
+  {71600, "Oh, no, I don't need you, but I miss you, come here"},
+
+  {75850, "He love me not, he loves me"},
+  {77890, "He holds me tight, then lets me go"},
+  {80050, "He love me not, he loves me"},
+  {82130, "He holds me tight, then lets me go"},
+
+  {84660, "Soon as you leave me, we always lose connection"},
+  {89010, "It's gettin' messy, I fiend for your affection"},
+  {93700, "Don't loosen your grip, got a hold on me"},
+  {97180, "Now, forever, let's get back together"},
+
+  {102110, "Lord, take it so far away"},
+  {106350, "I pray that, God, we don't break"},
+  {110610, "I want you to take me up and down"},
+  {114880, "And 'round and 'round again"},
+
+  {117600, "And, oh, it's hard to see you, but I wish you were right here"},
+  {122130, "Oh, it's hard to leave you when I get you everywhere"},
+  {126300, "All this time, I'm thinking we could never be a pair"},
+  {130510, "Oh, no, I don't need you, but I miss you, come here"},
+
+  {134480, "And, oh, it's hard to see you, but I wish you were right here"},
+  {139000, "Oh, it's hard to leave you when I get you everywhere"},
+  {143140, "All this time, I'm thinking, I'm strong enough to sink it"},
+  {147440, "Oh, no, I don't need you, but I miss you, come here"},
+
+  {151620, "He love me not, he loves me"},
+  {153690, "He holds me tight, then lets me go"},
+  {155820, "He love me not, he loves me"},
+  {157950, "He holds me tight, then lets me go"},
+  {160040, "He love me not, he loves me"},
+  {162160, "He holds me tight, then lets me go"},
+  {164240, "He love me not, he loves me"},
+  {166370, "He holds me tight, then lets me go"},
+
+  {168890, "You're gonna say that you're sorry at the end of the night"},
+  {173740, "Wake up in the morning, everything's alright"},
+  {177710, "At the end of the story, you're holdin' me tight"},
+  {182200, "I don't need to worry, am I out of my mind?"},
+
+  {185000, "And, oh, it's hard to see you, but I wish you were right here"},
+  {188430, "I'm losing my mind"},
+  {189500, "Oh, it's hard to leave you when I get you everywhere"},
+  {193700, "All this time I'm thinking, I'm strong enough to sink it"},
+  {197900, "Oh, no, I don't need you, but I miss you, come here"}
+};
+
+int totalLines = sizeof(lyrics) / sizeof(lyrics[0]);
+
+// ---------------- STYLE ----------------
+struct Style {
+  int align;
+  bool uppercase;
+  int fontType;
+  int mode;
+};
+
+Style pickStyle() {
+  Style s;
+  s.align = random(3);
+  s.uppercase = random(2);
+  s.fontType = random(4);
+  s.mode = random(4);
+  return s;
+}
+
+// ---------------- FONT ----------------
+void applyFont(int type) {
+  switch (type) {
+    case 0: display.setFont(); break;
+    case 1: display.setFont(&FreeSerifItalic9pt7b); break;
+    case 2: display.setFont(&FreeSansBold12pt7b); break;
+    case 3: display.setFont(&FreeMono9pt7b); break;
+  }
+}
+
+// ---------------- SAFE DRAW ----------------
+void drawText(String txt, Style s, bool negative) {
+
+  applyFont(s.fontType);
+
+  int16_t x1, y1;
+  uint16_t w, h;
+
+  display.getTextBounds(txt, 0, 0, &x1, &y1, &w, &h);
+
+  // normalize bounding box
+  int textX = -x1;
+  int textY = -y1;
+
+  int x;
+
+  if (s.align == 0) x = (SCREEN_WIDTH - w) / 2;
+  else if (s.align == 1) x = 0;
+  else x = SCREEN_WIDTH - w;
+
+  // clamp safely
+  if (x < 0) x = 0;
+  if (x > SCREEN_WIDTH - w) x = SCREEN_WIDTH - w;
+
+  int y = (SCREEN_HEIGHT - h) / 2;
+  if (y < 0) y = 0;
+
+  // TRUE NEGATIVE (NO invertDisplay)
+  if (negative) {
+    display.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, WHITE);
+    display.setTextColor(BLACK);
+  } else {
+    display.setTextColor(WHITE);
+  }
+
+  display.setCursor(x + textX, y + textY);
   display.print(txt);
 }
 
-// Pick text size so it fills the width nicely
-uint8_t autoSize(const char* txt) {
-  uint8_t len = strlen(txt);
-  if (len <= 4)  return 3;
-  if (len <= 7)  return 2;
-  return 1;
-}
+// ---------------- SPLIT ----------------
+int splitWords(String text, String out[], int maxParts) {
 
-// Draw the two lyric lines normally (for compound effects)
-void drawLyrics(const char* l1, const char* l2, int offsetX = 0, int offsetY = 0) {
-  display.setTextColor(SSD1306_WHITE);
-  bool hasTwo = strlen(l2) > 0;
-  if (hasTwo) {
-    uint8_t s1 = autoSize(l1), s2 = autoSize(l2);
-    centeredText(l1, offsetY + 8,  s1);
-    centeredText(l2, offsetY + 36, s2);
-  } else {
-    uint8_t s1 = autoSize(l1);
-    centeredText(l1, offsetY + 20, s1);
-  }
-}
+  int count = 0;
+  String word = "";
 
-// ── RNG helper ───────────────────────────────────────────
-uint16_t rnd(uint16_t maxVal) { return random(maxVal); }
+  for (size_t i = 0; i < text.length(); i++) {
 
-// ─────────────────────────────────────────────────────────
-//  ANIMATION FUNCTIONS
-// ─────────────────────────────────────────────────────────
-
-// 0 — GLITCH SLIDE IN from right with noise artifacts
-void animGlitchSlide(const char* l1, const char* l2, uint32_t holdMs) {
-  for (int x = SCREEN_W; x >= 0; x -= 12) {
-    cls();
-    // glitch noise bars
-    for (int i = 0; i < 6; i++) {
-      int gy = rnd(SCREEN_H);
-      int gx = rnd(SCREEN_W);
-      display.drawFastHLine(gx, gy, rnd(40), SSD1306_WHITE);
-    }
-    drawLyrics(l1, l2, x, 0);
-    show();
-    delay(30);
-  }
-  // Glitch flashes while holding
-  uint32_t t = millis();
-  while (millis() - t < holdMs) {
-    cls();
-    // random horizontal glitch lines
-    for (int i = 0; i < 4; i++) {
-      int gy = rnd(SCREEN_H);
-      display.drawFastHLine(0, gy, rnd(SCREEN_W), SSD1306_WHITE);
-    }
-    drawLyrics(l1, l2, rnd(6) - 3, 0);
-    show();
-    delay(80);
-    cls();
-    drawLyrics(l1, l2, 0, 0);
-    show();
-    delay(120);
-  }
-}
-
-// 1 — TYPEWRITER letter by letter
-void animTypewriter(const char* l1, const char* l2, uint32_t holdMs) {
-  char buf[32];
-  uint8_t s1 = autoSize(l1);
-  bool hasTwo = strlen(l2) > 0;
-  uint8_t s2 = hasTwo ? autoSize(l2) : 1;
-
-  // Type line1
-  for (uint8_t i = 0; i <= strlen(l1); i++) {
-    strncpy(buf, l1, i); buf[i] = '\0';
-    cls();
-    display.setTextColor(SSD1306_WHITE);
-    if (hasTwo) {
-      centeredText(buf, 8,  s1);
+    if (text[i] == ' ') {
+      if (count < maxParts) out[count++] = word;
+      word = "";
     } else {
-      centeredText(buf, 20, s1);
-    }
-    // cursor blink
-    display.fillRect(
-      (SCREEN_W / 2) + (i * 6 * s1) / 2 - (strlen(l1) * 6 * s1) / 2,
-      hasTwo ? 8 : 20, 3, 8 * s1, SSD1306_WHITE);
-    show();
-    delay(80);
-  }
-  // Type line2
-  if (hasTwo) {
-    for (uint8_t i = 0; i <= strlen(l2); i++) {
-      strncpy(buf, l2, i); buf[i] = '\0';
-      cls();
-      display.setTextColor(SSD1306_WHITE);
-      centeredText(l1, 8,  s1);
-      centeredText(buf, 36, s2);
-      display.fillRect(
-        (SCREEN_W / 2) + (i * 6 * s2) / 2 - (strlen(l2) * 6 * s2) / 2,
-        36, 3, 8 * s2, SSD1306_WHITE);
-      show();
-      delay(80);
+      word += text[i];
     }
   }
-  delay(holdMs);
+
+  if (word.length() && count < maxParts)
+    out[count++] = word;
+
+  return count;
 }
 
-// 2 — HEARTBEAT PULSE (invert flash, scale bounce illusion)
-void animHeartbeat(const char* l1, const char* l2, uint32_t holdMs) {
-  // Show normally then INVERT flash × 3 like a heartbeat
-  cls(); drawLyrics(l1, l2); show(); delay(150);
+// ---------------- RENDER FRAME ----------------
+void renderFrame(String txt, Style s) {
 
-  uint32_t t = millis();
-  int beat = 0;
-  while (millis() - t < holdMs) {
-    // THUMP 1
-    display.invertDisplay(true);  delay(60);
-    display.invertDisplay(false); delay(80);
-    // THUMP 2
-    display.invertDisplay(true);  delay(40);
-    display.invertDisplay(false); delay(40);
-    // rest
-    delay(BEAT_MS * 2 - 220);
-    beat++;
+  display.clearDisplay();
+
+  bool negative = (s.mode == 1);
+
+  // background effect first
+  if (s.mode == 2) {
+    display.drawFastHLine(random(128), random(64), random(20, 60), WHITE);
   }
-  display.invertDisplay(false);
+
+  // 🔥 ADD PARTICLES HERE
+  updateParticles();   // falling glitter
+  drawSparkles();      // twinkle
+  if (random(5) == 0) drawBurst();  // occasional burst
+
+  drawText(txt, s, negative);
+
+  display.display();
 }
 
-// 3 — SHAKE / TREMBLE
-void animShake(const char* l1, const char* l2, uint32_t holdMs) {
-  // Slide-in fast
-  for (int x = SCREEN_W; x >= 0; x -= 20) {
-    cls(); drawLyrics(l1, l2, x, 0); show(); delay(20);
-  }
-  int8_t offsets[] = {-4,4,-3,3,-2,2,-1,1,0};
-  uint32_t t = millis();
-  while (millis() - t < holdMs) {
-    for (uint8_t i = 0; i < 9; i++) {
-      cls(); drawLyrics(l1, l2, offsets[i], offsets[(i+3)%9]); show();
-      delay(35);
+// ---------------- TIMED DISPLAY ----------------
+void showWordTimed(String txt, Style s, uint32_t end) {
+
+  while (millis() < end) {
+
+    uint32_t frameStart = millis();
+
+    renderFrame(txt, s);
+
+    // maintain stable frame rate
+    uint32_t elapsed = millis() - frameStart;
+
+    if (elapsed < FRAME_TIME) {
+      delay(FRAME_TIME - elapsed);
     }
   }
 }
 
-// 4 — SCANLINE WIPE top → bottom
-void animScanline(const char* l1, const char* l2, uint32_t holdMs) {
-  // First draw full in a buffer effect: reveal one row at a time
-  for (int scanY = 0; scanY < SCREEN_H; scanY += 2) {
-    cls();
-    drawLyrics(l1, l2);
-    // black mask below scan line
-    display.fillRect(0, scanY, SCREEN_W, SCREEN_H - scanY, SSD1306_BLACK);
-    // scanline highlight
-    display.drawFastHLine(0, scanY, SCREEN_W, SSD1306_WHITE);
-    show();
-    delay(12);
+// ---------------- PLAY ENGINE ----------------
+void playLine(String text, uint32_t start, uint32_t end) {
+
+  Style s = pickStyle();
+
+  if (s.uppercase) text.toUpperCase();
+
+  String words[20];
+  int count = splitWords(text, words, 20);
+
+  uint32_t total = end - start;
+  uint32_t per = total / count;
+
+  for (int i = 0; i < count; i++) {
+
+    uint32_t wStart = start + i * per;
+    uint32_t wEnd   = start + (i + 1) * per;
+
+    showWordTimed(words[i], s, wEnd);
   }
-  cls(); drawLyrics(l1, l2); show();
-  delay(holdMs);
 }
 
-// 5 — SPLIT REVEAL (top half from left, bottom half from right)
-void animSplitReveal(const char* l1, const char* l2, uint32_t holdMs) {
-  for (int step = SCREEN_W; step >= 0; step -= 8) {
-    cls();
-    // Draw everything then clip with black rectangles
-    drawLyrics(l1, l2);
-    // top half mask
-    display.fillRect(step, 0, SCREEN_W - step, SCREEN_H / 2, SSD1306_BLACK);
-    // bottom half mask (mirror)
-    display.fillRect(0, SCREEN_H / 2, step, SCREEN_H / 2, SSD1306_BLACK);
-    show();
-    delay(20);
+void drawSparkles() {
+  for (int i = 0; i < 8; i++) {
+    display.drawPixel(random(SCREEN_WIDTH), random(SCREEN_HEIGHT), WHITE);
   }
-  cls(); drawLyrics(l1, l2); show();
-  delay(holdMs);
 }
 
-// 6 — STROBE FLASH
-void animStrobe(const char* l1, const char* l2, uint32_t holdMs) {
-  uint32_t t = millis();
-  bool on = true;
-  int interval = 60;
-  while (millis() - t < holdMs) {
-    if (on) { cls(); drawLyrics(l1, l2); show(); }
-    else    { cls(); show(); }
-    on = !on;
-    delay(interval);
-    // speed up then slow down
-    interval = 40 + abs((int)(millis() - t - holdMs/2)) / 8;
+void drawBurst() {
+  int cx = random(40, 90);
+  int cy = random(20, 50);
+
+  for (int i = 0; i < 6; i++) {
+    display.drawPixel(cx + random(-5, 5), cy + random(-5, 5), WHITE);
   }
-  cls(); drawLyrics(l1, l2); show();
 }
 
-// 7 — MATRIX RAIN then text reveal
-void animMatrixRain(const char* l1, const char* l2, uint32_t holdMs) {
-  const char charset[] = "01LOVEMENOT!?♥*#@";
-  const uint8_t COLS = SCREEN_W / 6;
-  uint8_t drops[22];
-  for (uint8_t i = 0; i < COLS; i++) drops[i] = rnd(SCREEN_H);
+void updateParticles() {
+  for (int i = 0; i < MAX_PARTICLES; i++) {
 
-  uint32_t t = millis();
-  uint32_t rainTime = min((uint32_t)1200, holdMs / 2);
+    particles[i].y += particles[i].speed;
 
-  while (millis() - t < rainTime) {
-    display.dim(false);
-    // Fade: draw semi-transparent black (draw black rects over old chars)
-    for (int fy = 0; fy < SCREEN_H; fy += 8) {
-      if (rnd(3) == 0)
-        display.fillRect(0, fy, SCREEN_W, 8, SSD1306_BLACK);
+    if (particles[i].y > SCREEN_HEIGHT) {
+      particles[i].y = 0;
+      particles[i].x = random(SCREEN_WIDTH);
     }
-    // Draw new chars
-    for (uint8_t col = 0; col < COLS; col++) {
-      display.setTextSize(1);
-      display.setTextColor(SSD1306_WHITE);
-      uint8_t ci = rnd(strlen(charset));
-      char ch[2] = { charset[ci], '\0' };
-      display.setCursor(col * 6, drops[col]);
-      display.print(ch);
-      drops[col] = (drops[col] + 8) % SCREEN_H;
-    }
-    show();
-    delay(60);
-  }
 
-  // Reveal the actual lyrics with a flash
-  display.invertDisplay(true); delay(80);
-  display.invertDisplay(false);
-  cls(); drawLyrics(l1, l2); show();
-  delay(holdMs - rainTime);
+    display.drawPixel(particles[i].x, particles[i].y, WHITE);
+  }
 }
 
-// ─────────────────────────────────────────────────────────
-//  INTRO ANIMATION — plays once on boot
-// ─────────────────────────────────────────────────────────
-void playIntro() {
-  // Draw a giant heart with ASCII art + title
-  const char* heart[] = {
-    " ** ** ",
-    "*     *",
-    " *   * ",
-    "  * *  ",
-    "   *   ",
-  };
-  for (int frame = 0; frame < 20; frame++) {
-    cls();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    for (uint8_t r = 0; r < 5; r++) {
-      display.setCursor((SCREEN_W - 42) / 2, 4 + r * 8 + (frame % 2));
-      display.print(heart[r]);
-    }
-    // Title below heart
-    display.setTextSize(1);
-    centeredText("LOVE ME NOT", 48, 1);
-    show();
-    delay(80);
-  }
-  // Flash reveal
-  display.invertDisplay(true); delay(120);
-  display.invertDisplay(false); delay(80);
-  display.invertDisplay(true); delay(80);
-  display.invertDisplay(false); delay(400);
-  cls(); show();
-}
-
-// ─────────────────────────────────────────────────────────
-//  OUTRO — loop ripple effect
-// ─────────────────────────────────────────────────────────
-void playOutro() {
-  for (int r = 0; r < 50; r++) {
-    cls();
-    for (int i = 0; i < r; i += 4)
-      display.drawCircle(SCREEN_W/2, SCREEN_H/2, i, SSD1306_WHITE);
-    centeredText("LOVE ME NOT", 28, 1);
-    show();
-    delay(40);
-  }
-  delay(800);
-}
-
-// ─────────────────────────────────────────────────────────
-//  SETUP & LOOP
-// ─────────────────────────────────────────────────────────
+// ---------------- SETUP ----------------
 void setup() {
-  Wire.begin(SDA_PIN, SCL_PIN);   // D2=SDA, D3=SCL
   Serial.begin(115200);
 
-  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
-    Serial.println("SSD1306 not found!");
-    for (;;);
-  }
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextWrap(false);
+  Wire.begin(SDA_PIN, SCL_PIN);
 
-  randomSeed(analogRead(A0));
-  delay(200);
-  playIntro();
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    while (1);
+  }
+
+  display.clearDisplay();
+  display.setTextColor(WHITE);
+
+  randomSeed(micros());
+
+  for (int i = 0; i < MAX_PARTICLES; i++) {
+  particles[i].x = random(SCREEN_WIDTH);
+  particles[i].y = random(SCREEN_HEIGHT);
+  particles[i].speed = random(1, 3);
+}
 }
 
+// ---------------- LOOP ----------------
 void loop() {
-  for (uint8_t i = 0; i < LYRIC_COUNT; i++) {
-    const Lyric& ly = lyrics[i];
-    uint32_t holdMs = (uint32_t)ly.beats * BEAT_MS;
 
-    switch (ly.style) {
-      case 0: animGlitchSlide  (ly.line1, ly.line2, holdMs); break;
-      case 1: animTypewriter   (ly.line1, ly.line2, holdMs); break;
-      case 2: animHeartbeat    (ly.line1, ly.line2, holdMs); break;
-      case 3: animShake        (ly.line1, ly.line2, holdMs); break;
-      case 4: animScanline     (ly.line1, ly.line2, holdMs); break;
-      case 5: animSplitReveal  (ly.line1, ly.line2, holdMs); break;
-      case 6: animStrobe       (ly.line1, ly.line2, holdMs); break;
-      case 7: animMatrixRain   (ly.line1, ly.line2, holdMs); break;
+  uint32_t baseTime = millis();
+
+  for (int i = 0; i < totalLines - 1; i++) {
+
+    while (millis() - baseTime < lyrics[i].time) {
+      delay(1);
     }
 
-    cls(); show();
-    delay(80);  // tiny gap between lyrics
+    playLine(
+      lyrics[i].text,
+      baseTime + lyrics[i].time,
+      baseTime + lyrics[i + 1].time
+    );
   }
 
-  playOutro();
-  delay(1000);
-  // Then it loops from the beginning!
+  while (1);
 }
