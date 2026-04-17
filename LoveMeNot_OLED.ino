@@ -14,7 +14,7 @@
 // ----------- DISPLAY CONFIG -----------
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
-#define FRAME_TIME 40   // ~25 FPS (stable + smooth)
+#define FRAME_TIME 1   // ~25 FPS (stable + smooth)
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
@@ -331,4 +331,5 @@ void loop() {
   }
 
   while (1); // stop after one run
+
 }

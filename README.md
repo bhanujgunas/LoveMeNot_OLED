@@ -3,7 +3,12 @@
 An ESP32 sketch that renders lyrics and visual effects on a 128x64 SSD1306 OLED display but only specific to "Love me not" Song by Ravyn Lenae.
 Still you can replace the lyrics with the timestamp format to use it for other songs. This is a native animate generation and not like the reference i used since it is directly converting the video to the image frame, idk how the video was created in the first place so i make this code to produce the animations itself. 😅🥲
 
-## Required Components
+<img src="image.jpg">
+<img src="image1.jpg">
+<video width="640" height="360" controls>
+  <source src="video.mp4" type="video/mp4">
+  Your browser does not support the video tag.
+</video>## Required Components
 
 - ESP32 development board
 - SSD1306 OLED display (128x64)
